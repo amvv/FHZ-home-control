@@ -1,16 +1,16 @@
 <?php
 
 include "config.php";
-include "coeficients.php";
+include "coeficientsPID.php";
 include "current_temperature.php";
 
 $ACTUATOR_LIMIT = 5;		#minimum value of the actuator to allow the boiler to turn on
 $DESIRED_OFFSET = 0.0;		#difference between the desired temperature and the actual temperature that the system will try to achieve
 $HISTERESIS = 0.4;
 
-$KP = 15;
-$KI = 5;
-$KD = 5;
+$KP = 10;
+$KI = 0;
+$KD = 0;
 
 
 #writes coeficients to a file
@@ -45,56 +45,11 @@ function get_time_difference( $start, $end )
     return( false );
 }
 
-function update_boiler_time($boiler_time, $on)
-{
-	for ($i = 30; $i>1; $i--)
-	{
-		$a = $i - 1;
-		$boiler_time[$i] = $boiler_time[$a];
-	}
-	if ($on == true)
-	{
-		$boiler_time[1] = 1;
-	}
-	else
-	{
-		$boiler_time[1] = 0;
-	}
-	return $boiler_time;
-}
 
-
-function writeCoeficients($warmup, $cool, $boiler_time, $boiler_pump_on, $time_last_on, $date_last_oni, $error, $integral, $control_value)
+function writeCoeficients($integral, $control_value, $vector)
 {
 	$s = "<?php\n";
 
-	foreach($warmup as $room => $fht) 
-	{
-		for ($i = 1; $i < 41; $i++)
-		{
-			$a = $warmup[$room][$i];
-			$s .= "\$warmup[\"$room\"][$i] = $a;\n";
-		}
-		$s .= "\n";
-	}
-
-	foreach($cool as $room => $fht) 
-	{
-		for ($i = 1; $i < 41; $i++)
-		{
-			$a = $cool[$room][$i];
-			$s .= "\$cool[\"$room\"][$i] = $a;";
-			$s .= "\n";
-		}
-		$s .= "\n";
-	}
-	for ($i = 1; $i < 31; $i++)
-	{
-		$a = $boiler_time[$i];
-		$s .= "\$boiler_time[$i] = $a;";
-		$s .= "\n";
-	}
-	$s .= "\n";
 	foreach($integral as $room => $fht) 
 	{
 			$a = $integral[$room];
@@ -102,38 +57,30 @@ function writeCoeficients($warmup, $cool, $boiler_time, $boiler_pump_on, $time_l
 			$s .= "\n";
 	}
 	$s .= "\n";
-	
-	//$boiler_pump_on
-	
-	$a = $boiler_pump_on;
-	$s .= "\$boiler_pump_on = $a;";
+	foreach($control_value as $room => $fht) 
+	{
+			$a = $control_value[$room];
+			$s .= "\$control_value[\"$room\"] = $a;";
+			$s .= "\n";
+	}
 	$s .= "\n";
-	
-	//$time_last_on
-	
-	$a = $time_last_on;
-	$s .= "\$time_last_on = $a;";
+	foreach($vector as $room => $fht) 
+	{
+			$a = $fht["desired-temp"];
+			$s .= "\$desired_temp[\"$room\"] = $a;";
+			$s .= "\n";
+	}
 	$s .= "\n";
-	
-	//$date_last_on
-	
-	$a = $date_last_on;
-	$s .= "\$date_last_on = \"$a\";";
-	$s .= "\n";
-	//$error
-	
-	$a = $error;
-	$s .= "\$previous_error = $a;";
-	$s .= "\n";
-	//$control_value
-	
-	$a = $control_value;
-	$s .= "\$control_value = $a;";
-	$s .= "\n";
-	
+	foreach($vector as $room => $fht) 
+	{
+			$a = $fht["measured-time"];
+			$s .= "\$measured_time[\"$room\"] = \"$a\";";
+			$s .= "\n";
+	}
+	$s .= "\n";		
 	$s .= "?>\n";
 	
-	$handle = fopen("/usr/local/bin/fhz1000/coeficients.php", 'w'); 
+	$handle = fopen("/usr/local/bin/fhz1000/coeficientsPID.php", 'w'); 
 	fwrite($handle, $s);
 	fclose($handle);
 }
@@ -371,7 +318,7 @@ if (!isset($vector["babyRoom"]["actuator"]))
 	$vector["babyRoom"]["actuator"] = 0;
 }
 
-echo "forever - 2010 08 18<br>";
+echo "foreverPID - 2011 10 09<br>";
 	
 $outside_temp = $current_temperature;
 
@@ -389,192 +336,126 @@ echo "outside temp = $outside_temp<br>\n";
 		$vector[$room]["desired-temp"] = $parts[0];
 	}
 	
-	$boiler_on = false;
 	$order = "set boiler off";
 	$wkday = date('l');
 
-$log_handle = fopen("/usr/local/bin/fhz1000/forever.log", 'a'); 
+$log_handle = fopen("/usr/local/bin/fhz1000/foreverPID.log", 'a'); 
 ###############################################fwrite($log_handle, $number);
 	
 	foreach($vector as $room => $fht) 
 	{
 
-//if about to switch to night temperature than do not warm up
+ //if about to switch to night temperature than do not warm up
 
-                switch($wkday) {
+//                switch($wkday) {
 
-                    case 'Monday':    $c1 = strtotime($fht["mon-to1"]) - time();$c2 = strtotime($fht["mon-to2"]) - time();; break;
-                    case 'Tuesday':   $c1 = strtotime($fht["tue-to1"]) - time();$c2 = strtotime($fht["tue-to2"]) - time();; break;
-                    case 'Wednesday': $c1 = strtotime($fht["wed-to1"]) - time();$c2 = strtotime($fht["wed-to2"]) - time();; break;
-                    case 'Thursday':  $c1 = strtotime($fht["thu-to1"]) - time();$c2 = strtotime($fht["thu-to2"]) - time();; break;
-                    case 'Friday':    $c1 = strtotime($fht["fri-to1"]) - time();$c2 = strtotime($fht["fri-to2"]) - time();; break;
-                    case 'Saturday':  $c1 = strtotime($fht["sat-to1"]) - time();$c2 = strtotime($fht["sat-to2"]) - time();; break;
-                    case 'Sunday':    $c1 = strtotime($fht["sun-to1"]) - time();$c2 = strtotime($fht["sun-to2"]) - time();; break;
-                }
+//                    case 'Monday':    $c1 = strtotime($fht["mon-to1"]) - time();$c2 = strtotime($fht["mon-to2"]) - time();; break;
+//                    case 'Tuesday':   $c1 = strtotime($fht["tue-to1"]) - time();$c2 = strtotime($fht["tue-to2"]) - time();; break;
+//                    case 'Wednesday': $c1 = strtotime($fht["wed-to1"]) - time();$c2 = strtotime($fht["wed-to2"]) - time();; break;
+//                    case 'Thursday':  $c1 = strtotime($fht["thu-to1"]) - time();$c2 = strtotime($fht["thu-to2"]) - time();; break;
+//                    case 'Friday':    $c1 = strtotime($fht["fri-to1"]) - time();$c2 = strtotime($fht["fri-to2"]) - time();; break;
+//                    case 'Saturday':  $c1 = strtotime($fht["sat-to1"]) - time();$c2 = strtotime($fht["sat-to2"]) - time();; break;
+//                    case 'Sunday':    $c1 = strtotime($fht["sun-to1"]) - time();$c2 = strtotime($fht["sun-to2"]) - time();; break;
+//                }
 
-                if (($c1 < 10) and ($c1 > 0))
-                {
-                        echo "do not turn on - 1 - $c1!!!";
-                }
-                if (($c2 < 10) and ($c2 > 0))
-                {
-                        echo "do not turn on - 2 - $c2!!!";
-                }
-
+//                if (($c1 < 10) and ($c1 > 0))
+//               {
+//                       echo "do not turn on - 1 - $c1!!!";
+//                }
+//                if (($c2 < 10) and ($c2 > 0))
+//                {
+//                        echo "do not turn on - 2 - $c2!!!";
+//                }
 
 
 
 		$output_string = date('Y-m-d H:i:s');
 		$output_string .= "\t" . $room . "  \t";
 		
-		$c = time() - strtotime($fht["measured-time"]);
-		$c = $c / 60;
-
-		if ($c > 21)
-		{
-			$c = 21;
-		}
-
-		$short_num = sprintf("%5.1f", $c); 
-
-		$output_string .= "$short_num\t";
-		echo "<b>$room</b> - time elapsed $short_num\n";
-		
-		$k = 0;//boiler warming in the last minutes
-	//CHANGES NEWBOILER
-		//for ($i = 1; $i<$c+9; $i++)
-		for ($i = 1; $i<11; $i++)
-		{
-			$k += $boiler_time[$i];
-		}
-		$output_string .= "$k\t";
-		//Old calculation:
-		$k = $k * 1.3; //after switching off still warms up for a bit
-		//New calculation
-		//$tttt = pow($k, 1.4537);
-		//$k = 0.4092 * $tttt;
 
 
-		$temp_delta=$fht["measured-temp"] - $outside_temp;
-		$temp_delta = round($temp_delta);
-		echo "delta $temp_delta\n";
-		if ($temp_delta <= 0)
-		{
-			$temp_delta = 1;
-		}
 		$output_string .= "$outside_temp\t";
 		
 		$current_temp = $fht["measured-temp"];
 
 		$output_string .= "$current_temp\t";
 		
-		$warm_c = $warmup["$room"][$temp_delta];
-		$cool_c = $cool["$room"][$temp_delta];
-
-		$estimated_temp = $k * $warm_c - ($c - $k) * $cool_c;
-		$estimated_temp = $estimated_temp * $fht["actuator"]/100;
-		$estimated_temp = $estimated_temp + $current_temp;
-		
-		$short_num = sprintf("%5.2f", $estimated_temp); 
-
-		$output_string .= "$short_num\t";
 		$aa = $fht["desired-temp"];
 		$output_string .= "$aa\t";
 		$aa = $fht["actuator"];
 		$output_string .= "$aa\t";
 		
 		//NEW STUFF
-		$error = $fht["desired-temp"] - $fht["measured-temp"];
-//tw = (desired - measured)Kheating + (measured - outside)Kloss 
-		if (abs($error) < 1.0)
-		{
-			$integral[$room] = $integral[$room] + $error;
-		}
-		else
+		
+		
+		if ($desired_temp["babyRoom"] <> $fht["desired-temp"])  //change in setpoint: reset the PID controller
 		{
 			$integral[$room] = 0;
 		}
-		$control_value = $error*$KP + $integral[$room]*$KI;
+		
+		
+		$error = $fht["desired-temp"] - $fht["measured-temp"];
 
-
-
-
-		//END OF NEW STUFF	
-		echo "estimated $estimated_temp °C ";
-		echo "actuator $aa% ";
-		echo "current $current_temp °C<br>\n";
-		echo "\n";
-
-		//attemp at histeresis
-		if ($boiler_time[1] == 1)
+		//only update the integral term upon each measurement of the room temperature
+		if ($fht["measured-time"] <> $measured_time[$room])
 		{
-			$estimated_temp = $estimated_temp - $HISTERESIS;
-		}
-
-
-
-		$p = 0;
-		for ($i = 1; $i<6; $i++)
-		{
-			$p += $boiler_time[$i];
-		}
-
-		if (($boiler_time[1] == 0) AND ($p > 0))
-		{
-			//boiler has not been off for 5 minutes
-			//wait until that is the case
-			echo "waiting for boiler resting time - $p ";
-		}
-		else
-		{
-
-
-			if ($fht["actuator"] > $ACTUATOR_LIMIT and $estimated_temp < ($fht["desired-temp"]))
+		
+			echo "udating the integral term!!\n";
+			if (abs($error) < 1.0)
 			{
-				//$time_needed = ($fht["desired-temp"] - $fht["measured-temp"] * 15);
-				$date = date('Y-m-d H:i:s');
-				printf ("$date");
-				printf ("-on for $room act:%s mea:%s des:%s est:%2.2f<br>\n",
-				$fht["actuator"], $fht["measured-temp"],
-				$fht["desired-temp"], $estimated_temp);
-				$boiler_on = true;
+				$integral[$room] = $integral[$room] + $error;
 			}
 			else
 			{
-				//do nothing...
+				$integral[$room] = 0;
 			}
 		}
-		if ($boiler_on == true)
-		{
-			$output_string .= "ON\t";
-		}
-		else
-		{
-			$output_string .= "OFF\t";
-		}
-		$output_string .= "\n";
-		fwrite($log_handle, $output_string);
-	}
-	if ($boiler_on == true)
-	{
-		$order = "set boiler on-for-timer 65";
-		//$order = "set boiler on";
-		$time_last_on = time();
-	}
+		
+//based on the curve for the boiler: -(tout)^2/100 - (tout) + a constant linearly related to the desired temperature: 27 + desired = K
+
+		$base_water_temperature = -($outside_temp^2)/100 - $outside_temp + 27 + $fht["desired-temp"];
+		
+		echo "base water temperature for $room: \t $base_water_temperature C\n";
+
+		$control_value[$room] = $error*$KP + $integral[$room]*$KI + $base_water_temperature;
+
+		$output_string .= "$base_water_temperature\t";
+		$output_string .= "$error\t";
+		$aa = $integral[$room];
+		$output_string .= "$aa\t";
+		$aa = $control_value[$room];
+		$output_string .= "$aa\n";
+	
+		
+
+fwrite($log_handle, $output_string);
+
+
+		//END OF NEW STUFF	
+}
 
 fclose($log_handle);
-$boiler_time = update_boiler_time($boiler_time, $boiler_on);
 
+$max_control = 0;
+
+	foreach($control_value as $room => $fht) 
+	{
+			$a = $control_value[$room];
+			echo "\$control[\"$room\"] = $a;\n";
+			if ($a > $max_control)
+			{
+				$max_control = $a;
+			}
+	}
+
+$max_control = round($max_control);
+echo "Control value to send: $max_control";
 
 //check if the boiler pump should be disconnected and do it if so
 
-$time_now = time();
-$boiler_elapsed = $time_now-$time_last_on;
+//COMMENTED SINCE This is in test and should be adapted for JeeNodes
+//execFHZ($order,$fhz1000,$fhz1000port);
 
-
-//COMMENTED SINCE RADIATORS ARE OFF COMMENT IN WHEN SYSTEM READY
-execFHZ($order,$fhz1000,$fhz1000port);
-
-writeCoeficients($warmup, $cool, $boiler_time, $boiler_pump_on, $time_last_on, $date_last_on, $error, $integral, $control_value);
+writeCoeficients($integral, $control_value, $vector);
 
 ?> 
