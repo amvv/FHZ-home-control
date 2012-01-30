@@ -2,14 +2,16 @@
 
 include "config.php";
 include "coeficientsPID.php";
+include "cleaning_lady.php";
 include "current_temperature.php";
 
-$ACTUATOR_LIMIT = 5;		#minimum value of the actuator to allow the boiler to turn on
-$DESIRED_OFFSET = 0.0;		#difference between the desired temperature and the actual temperature that the system will try to achieve
-$HISTERESIS = 0.4;
+$ACTUATOR_LIMIT = 15;		#minimum value of the actuator to allow the boiler to turn on
+$DESIRED_OFFSET = 0.1;		#difference between the desired temperature and the actual temperature that the system will try to achieve
+$TEMPERATURE_LIMIT = 80;
 
-$KP = 10;
-$KI = 0;
+
+$KP = 12;
+$KI = 2;
 $KD = 0;
 
 
@@ -46,7 +48,7 @@ function get_time_difference( $start, $end )
 }
 
 
-function writeCoeficients($integral, $control_value, $vector)
+function writeCoeficients($integral, $control_value, $vector, $estimated)
 {
 	$s = "<?php\n";
 
@@ -78,6 +80,20 @@ function writeCoeficients($integral, $control_value, $vector)
 			$s .= "\n";
 	}
 	$s .= "\n";		
+	foreach($vector as $room => $fht) 
+	{
+			$a = $fht["measured-temp"];
+			$s .= "\$measured_temp[\"$room\"] = \"$a\";";
+			$s .= "\n";
+	}
+	$s .= "\n";		
+	foreach($estimated as $room => $fht) 
+	{
+			$a = $estimated[$room];
+			$s .= "\$estimated[\"$room\"] = $a;";
+			$s .= "\n";
+	}
+	$s .= "\n";
 	$s .= "?>\n";
 	
 	$handle = fopen("/usr/local/bin/fhz1000/coeficientsPID.php", 'w'); 
@@ -88,13 +104,13 @@ function writeCoeficients($integral, $control_value, $vector)
 
 
 #executes over the network to the fhz1000.pl (or localhost)
-	function execFHZ($order,$machine,$port)
+	function execPID($order,$machine,$port)
 	{
 		$fp = stream_socket_client("tcp://$machine:$port", $errno, $errstr, 30);
         	if (!$fp) {
         		echo "$errstr ($errno)<br />\n";
         		} else {
-        		fwrite($fp, "$order\n;quit\n");
+        		fwrite($fp, "$order");
         		fclose($fp);
         		}
 	}
@@ -283,10 +299,10 @@ function writeCoeficients($integral, $control_value, $vector)
 	//echo $vector["kitchen"]["measured-time"] . "\n";
 	//echo $vector["kitchen"]["desired-temp"] . "\n";
 	//echo $vector["livingRoom"]["actuator"] . "\n";
-	$vector["livingRoom"]["actuator"]  = 75;
-	$vector["sleepRoom"]["actuator"]  = 75;
-	$vector["babyRoom"]["actuator"]  = 75;
-	$vector["kitchen"]["actuator"]  = 75;
+//$vector["livingRoom"]["actuator"]  = 75;
+//$vector["sleepRoom"]["actuator"]  = 75;
+//$vector["babyRoom"]["actuator"]  = 75;
+//$vector["kitchen"]["actuator"]  = 75;
 	//$vector["livingRoom"]["actuator"]  = 0;
 	//$vector["sleepRoom"]["actuator"]  = 0;
 	//$vector["babyRoom"]["actuator"]  = 0;
@@ -322,7 +338,9 @@ echo "foreverPID - 2011 10 09<br>";
 	
 $outside_temp = $current_temperature;
 
-echo "outside temp = $outside_temp<br>\n";
+$indicative = -($outside_temp^2)/100 - $outside_temp + 45; 
+
+echo "outside temp = $outside_temp - indicative water temperature $indicative for 20C inside<br>\n";
 	
 	foreach($vector as $room => $fht) 
 	{
@@ -368,18 +386,26 @@ $log_handle = fopen("/usr/local/bin/fhz1000/foreverPID.log", 'a');
 //                }
 
 
-
 		$output_string = date('Y-m-d H:i:s');
 		$output_string .= "\t" . $room . "  \t";
 		
 
-
 		$output_string .= "$outside_temp\t";
+
 		
 		$current_temp = $fht["measured-temp"];
 
 		$output_string .= "$current_temp\t";
-		
+
+		if ($cl == 2) // cl=1 temp not limited, cl = 2, temp limited
+		{
+			if ($fht["desired-temp"] > 18)
+			{
+				$fht["desired-temp"] = 18;
+				
+			} 
+		}
+	
 		$aa = $fht["desired-temp"];
 		$output_string .= "$aa\t";
 		$aa = $fht["actuator"];
@@ -388,11 +414,10 @@ $log_handle = fopen("/usr/local/bin/fhz1000/foreverPID.log", 'a');
 		//NEW STUFF
 		
 		
-		if ($desired_temp["babyRoom"] <> $fht["desired-temp"])  //change in setpoint: reset the PID controller
+		if ($desired_temp[$room] <> $fht["desired-temp"])  //change in setpoint: reset the PID controller
 		{
 			$integral[$room] = 0;
 		}
-		
 		
 		$error = $fht["desired-temp"] - $fht["measured-temp"];
 
@@ -401,23 +426,63 @@ $log_handle = fopen("/usr/local/bin/fhz1000/foreverPID.log", 'a');
 		{
 		
 			echo "udating the integral term!!\n";
-			if (abs($error) < 1.0)
+			
+			if ($error < 1.0)
 			{
 				$integral[$room] = $integral[$room] + $error;
 			}
-			else
+			if ($error < -0.4) //big overshoot
 			{
 				$integral[$room] = 0;
 			}
+			
+			//following lines remove 20120118 to implement a better integral above
+			//if (abs($error) < 0.5)
+			//{
+			//	$integral[$room] = $integral[$room] + $error;
+			//}
+			//else
+			//{
+			//	$integral[$room] = 0;
+			//}
+			
+			
+			//upodating he estimated
+			$estimated[$room] = $fht["measured-temp"];
 		}
 		
 //based on the curve for the boiler: -(tout)^2/100 - (tout) + a constant linearly related to the desired temperature: 27 + desired = K
 
-		$base_water_temperature = -($outside_temp^2)/100 - $outside_temp + 27 + $fht["desired-temp"];
+		$base_water_temperature = -($outside_temp^2)/100 - $outside_temp + 15+10*$fht["actuator"]/100 + $fht["desired-temp"];
 		
-		echo "base water temperature for $room: \t $base_water_temperature C\n";
+		echo "base water temperature for $room: \t $base_water_temperature C at $error\n";
 
 		$control_value[$room] = $error*$KP + $integral[$room]*$KI + $base_water_temperature;
+
+
+
+		$estimated[$room] += ($control_value[$room] - $base_water_temperature) * 0.006; //this coeficient should be adjusted according to room and temperature
+
+//reseting actions
+//not enough actuator
+
+		if ($fht["actuator"] < $ACTUATOR_LIMIT)
+		{
+			$control_value[$room] = 0;
+			$integral[$room] = 0;
+		}
+//big overshoot, or house cooling down
+		if ($error < -0.2) 
+		{
+			$control_value[$room] = 0;
+			$integral[$room] = 0;
+		}
+//excessive setpoint
+		if ($control_value[$room] > $TEMPERATURE_LIMIT)
+		{
+			$control_value[$room] = $TEMPERATURE_LIMIT;
+		}
+
 
 		$output_string .= "$base_water_temperature\t";
 		$output_string .= "$error\t";
@@ -436,7 +501,17 @@ fwrite($log_handle, $output_string);
 
 fclose($log_handle);
 
-$max_control = 0;
+
+//This max control should be set to 10 if the outside temperature is lower than 0C
+
+if ($outside_temp < 0)
+{
+	$max_control = 10;
+}
+else
+{
+	$max_control = 0;
+}
 
 	foreach($control_value as $room => $fht) 
 	{
@@ -449,13 +524,17 @@ $max_control = 0;
 	}
 
 $max_control = round($max_control);
+
+
+
 echo "Control value to send: $max_control";
+$order = "$max_control t";
 
 //check if the boiler pump should be disconnected and do it if so
 
 //COMMENTED SINCE This is in test and should be adapted for JeeNodes
-//execFHZ($order,$fhz1000,$fhz1000port);
+execPID($order,$JEEserver,$JEEport);
 
-writeCoeficients($integral, $control_value, $vector);
+writeCoeficients($integral, $control_value, $vector, $estimated);
 
 ?> 
